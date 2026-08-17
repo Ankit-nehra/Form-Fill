@@ -43,15 +43,35 @@ function App() {
 
   const recognitionRef = useRef(null);
 
-  const currentField = fields[currentIndex];
+  // Refs help us avoid old/stale state inside speech callbacks
+  const currentIndexRef = useRef(0);
+  const aiModeRef = useRef(false);
 
-  // Browser speech recognition setup
+  // --------------------------------------------------
+  // Keep refs updated
+  // --------------------------------------------------
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
+
+  useEffect(() => {
+    aiModeRef.current = aiMode;
+  }, [aiMode]);
+
+  // --------------------------------------------------
+  // Speech Recognition Setup
+  // --------------------------------------------------
+
   useEffect(() => {
     const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
+      window.SpeechRecognition ||
+      window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setMessage("Speech recognition is not supported in this browser.");
+      setMessage(
+        "Speech recognition is not supported in this browser."
+      );
       return;
     }
 
@@ -63,37 +83,44 @@ function App() {
 
     recognition.onstart = () => {
       setListening(true);
-      setMessage("Listening...");
+      setMessage("");
     };
 
     recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-
-      setFormData((prev) => ({
-        ...prev,
-        [currentField.key]: transcript,
-      }));
+      const transcript =
+        event.results[0][0].transcript.trim();
 
       setListening(false);
-      setMessage(`Got it: "${transcript}"`);
 
-      // Move to next question
-      setTimeout(() => {
-        if (currentIndex < fields.length - 1) {
-          const nextIndex = currentIndex + 1;
-          setCurrentIndex(nextIndex);
-          speak(fields[nextIndex].question);
-        } else {
-          speak("Your form is complete. Thank you!");
-          setAiMode(false);
-          setMessage("Form completed!");
-        }
-      }, 800);
+      handleVoiceAnswer(transcript);
     };
 
     recognition.onerror = (event) => {
-      console.error(event.error);
+      console.log("Speech error:", event.error);
+
       setListening(false);
+
+      // User didn't say anything.
+      // Stay on the SAME field.
+      if (event.error === "no-speech") {
+        setMessage("I didn't hear you. Listening again...");
+
+        if (aiModeRef.current) {
+          setTimeout(() => {
+            startListening();
+          }, 700);
+        }
+
+        return;
+      }
+
+      if (event.error === "not-allowed") {
+        setMessage(
+          "Microphone permission was denied."
+        );
+        return;
+      }
+
       setMessage("I couldn't hear you. Please try again.");
     };
 
@@ -106,60 +133,232 @@ function App() {
     return () => {
       recognition.stop();
     };
-  }, [currentIndex]);
+  }, []);
 
-  // AI voice
-  const speak = (text) => {
+  // --------------------------------------------------
+  // Text To Speech
+  // --------------------------------------------------
+
+  const speak = (text, onComplete) => {
     window.speechSynthesis.cancel();
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance =
+      new SpeechSynthesisUtterance(text);
 
     utterance.lang = "en-IN";
     utterance.rate = 0.95;
     utterance.pitch = 1;
 
+    utterance.onend = () => {
+      if (onComplete) {
+        onComplete();
+      }
+    };
+
     window.speechSynthesis.speak(utterance);
   };
 
-  // Start AI mode
-  const startAIMode = () => {
-    setAiMode(true);
-    setCurrentIndex(0);
-    setMessage("");
+  // --------------------------------------------------
+  // Start listening automatically
+  // --------------------------------------------------
 
-    speak(fields[0].question);
-  };
-
-  // Start listening
   const startListening = () => {
     if (!recognitionRef.current) {
-      setMessage("Speech recognition is not supported.");
+      setMessage(
+        "Speech recognition is not supported."
+      );
+      return;
+    }
+
+    if (!aiModeRef.current) {
+      return;
+    }
+
+    if (listening) {
       return;
     }
 
     try {
       recognitionRef.current.start();
     } catch (error) {
-      console.log(error);
+      // Browser throws an error if recognition
+      // is already running.
+      console.log("Recognition:", error);
     }
   };
 
-  // Stop AI mode
+  // --------------------------------------------------
+  // Ask current question
+  // --------------------------------------------------
+
+  const askCurrentQuestion = (index) => {
+    const field = fields[index];
+
+    speak(field.question, () => {
+      // Once AI finishes speaking,
+      // automatically start microphone.
+      if (aiModeRef.current) {
+        setTimeout(() => {
+          startListening();
+        }, 250);
+      }
+    });
+  };
+
+  // --------------------------------------------------
+  // Handle voice answer
+  // --------------------------------------------------
+
+  const handleVoiceAnswer = (transcript) => {
+    const index = currentIndexRef.current;
+    const field = fields[index];
+
+    // Put answer into form
+    setFormData((prev) => ({
+      ...prev,
+      [field.key]: transcript,
+    }));
+
+    setMessage(`Got it: "${transcript}"`);
+
+    // Wait a little so user can see
+    // the value appear in the form.
+    setTimeout(() => {
+      if (!aiModeRef.current) {
+        return;
+      }
+
+      moveToNextField(index);
+    }, 600);
+  };
+
+  // --------------------------------------------------
+  // Move to next EMPTY field
+  // --------------------------------------------------
+
+  const moveToNextField = (answeredIndex) => {
+    // We need latest form data.
+    setFormData((latestData) => {
+      // Find next empty field after current field
+      let nextIndex = -1;
+
+      for (
+        let i = answeredIndex + 1;
+        i < fields.length;
+        i++
+      ) {
+        if (!latestData[fields[i].key]) {
+          nextIndex = i;
+          break;
+        }
+      }
+
+      // If nothing after current field,
+      // check if any field before it is empty.
+      if (nextIndex === -1) {
+        for (let i = 0; i < fields.length; i++) {
+          if (!latestData[fields[i].key]) {
+            nextIndex = i;
+            break;
+          }
+        }
+      }
+
+      // All fields completed
+      if (nextIndex === -1) {
+        setMessage("Form completed!");
+
+        speak(
+          "Your form is complete. Please check it before submitting."
+        );
+
+        setTimeout(() => {
+          setAiMode(false);
+        }, 1000);
+
+        return latestData;
+      }
+
+      // Move to next empty field
+      setCurrentIndex(nextIndex);
+      currentIndexRef.current = nextIndex;
+
+      setMessage("");
+
+      // Ask next question
+      setTimeout(() => {
+        if (aiModeRef.current) {
+          askCurrentQuestion(nextIndex);
+        }
+      }, 200);
+
+      return latestData;
+    });
+  };
+
+  // --------------------------------------------------
+  // Start AI Mode
+  // --------------------------------------------------
+
+  const startAIMode = () => {
+    // Find FIRST EMPTY field
+    const firstEmptyIndex = fields.findIndex(
+      (field) => !formData[field.key]
+    );
+
+    // If everything is already filled
+    if (firstEmptyIndex === -1) {
+      setAiMode(true);
+
+      speak(
+        "Your form is already filled. Please check it before submitting."
+      );
+
+      return;
+    }
+
+    setAiMode(true);
+    aiModeRef.current = true;
+
+    setCurrentIndex(firstEmptyIndex);
+    currentIndexRef.current = firstEmptyIndex;
+
+    setMessage("");
+
+    // Ask from first EMPTY field
+    askCurrentQuestion(firstEmptyIndex);
+  };
+
+  // --------------------------------------------------
+  // Stop AI Mode
+  // --------------------------------------------------
+
   const stopAIMode = () => {
     recognitionRef.current?.stop();
+
     window.speechSynthesis.cancel();
 
     setAiMode(false);
+    aiModeRef.current = false;
+
     setListening(false);
     setMessage("");
   };
 
+  // --------------------------------------------------
+  // Normal input change
+  // --------------------------------------------------
+
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       [e.target.name]: e.target.value,
-    });
+    }));
   };
+
+  // --------------------------------------------------
+  // Submit
+  // --------------------------------------------------
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -169,17 +368,39 @@ function App() {
     alert("Form submitted!");
   };
 
+  // --------------------------------------------------
+  // Current field
+  // --------------------------------------------------
+
+  const currentField = fields[currentIndex];
+
+  // --------------------------------------------------
+  // UI
+  // --------------------------------------------------
+
   return (
     <div className="app">
       <div className="form-card">
+
         <div className="header">
           <h1>Simple Form</h1>
-          <p>Fill the form normally or use AI Mode.</p>
+
+          <p>
+            Fill the form normally or use AI Mode.
+          </p>
         </div>
 
         <form onSubmit={handleSubmit}>
-          {fields.map((field) => (
-            <div className="field" key={field.key}>
+
+          {fields.map((field, index) => (
+            <div
+              className={`field ${
+                aiMode && index === currentIndex
+                  ? "active-field"
+                  : ""
+              }`}
+              key={field.key}
+            >
               <label>{field.label}</label>
 
               <input
@@ -192,23 +413,41 @@ function App() {
             </div>
           ))}
 
-          <button className="submit-btn" type="submit">
+          <button
+            className="submit-btn"
+            type="submit"
+          >
             Submit Form
           </button>
         </form>
 
+        {/* AI SECTION */}
+
         <div className="ai-section">
+
           {!aiMode ? (
-            <button className="ai-btn" onClick={startAIMode}>
+
+            <button
+              className="ai-btn"
+              type="button"
+              onClick={startAIMode}
+            >
               🤖 Start AI Mode
             </button>
+
           ) : (
+
             <>
               <div className="ai-box">
-                <div className="ai-icon">🤖</div>
+
+                <div className="ai-icon">
+                  🤖
+                </div>
 
                 <div>
-                  <strong>AI Assistant</strong>
+                  <strong>
+                    AI Assistant
+                  </strong>
 
                   <p>
                     {currentField
@@ -216,22 +455,42 @@ function App() {
                       : "Form completed!"}
                   </p>
                 </div>
+
               </div>
 
+              {/* This button is now only a manual
+                  fallback. Normally AI starts listening
+                  automatically. */}
+
               <button
-                className={`mic-btn ${listening ? "listening" : ""}`}
+                type="button"
+                className={`mic-btn ${
+                  listening ? "listening" : ""
+                }`}
                 onClick={startListening}
+                disabled={listening}
               >
-                {listening ? "🎙️ Listening..." : "🎙️ Speak Answer"}
+                {listening
+                  ? "🎙️ Listening..."
+                  : "🎙️ Speak Answer"}
               </button>
 
-              <button className="stop-btn" onClick={stopAIMode}>
+              <button
+                type="button"
+                className="stop-btn"
+                onClick={stopAIMode}
+              >
                 Stop AI Mode
               </button>
 
-              {message && <p className="status">{message}</p>}
+              {message && (
+                <p className="status">
+                  {message}
+                </p>
+              )}
             </>
           )}
+
         </div>
       </div>
     </div>
