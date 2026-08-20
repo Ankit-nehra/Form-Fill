@@ -16,6 +16,27 @@
 
 ---
 
+## 🎥 Live Demo
+
+🚀 **Try the application live:**
+
+<p align="center">
+  <a href="https://form-fill-theta.vercel.app/" target="_blank">
+    <img src="https://img.shields.io/badge/🚀%20Live%20Demo-Open%20Application-00C853?style=for-the-badge" alt="Live Demo" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://form-fill-theta.vercel.app/" target="_blank">
+    https://form-fill-theta.vercel.app/
+  </a>
+</p>
+
+> 🎙️ Open the live application and allow microphone permission to try the AI Voice Mode.
+
+
+---
+
 ## 📌 Table of Contents
 
 - [About The Project](#-about-the-project)
